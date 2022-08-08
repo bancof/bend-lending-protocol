@@ -1,3 +1,4 @@
+import rawBRE from "hardhat";
 import BendConfig from "../../markets/bend";
 import { insertContractAddressInDb, registerContractInJsonDb } from "../../helpers/contracts-helpers";
 import {
@@ -14,36 +15,39 @@ import {
 import { Signer } from "ethers";
 import { eContractid, tEthereumAddress, BendPools } from "../../helpers/types";
 import { ConfigNames, getTreasuryAddress, loadPoolConfig } from "../../helpers/configuration";
+import { initializeMakeSuite } from "../helpers/make-suite";
 import { waitForTx } from "../../helpers/misc-utils";
 import {
   getPoolAdminSigner,
   getEmergencyAdminSigner,
   getBNFTRegistryProxy,
+  getDeploySigner,
+  getSecondSigner,
   getLendPool,
 } from "../../helpers/contracts-getters";
 
 const buildTestEnv = async (deployer: Signer, secondaryWallet: Signer) => {
-  console.time("setup");
+  console.time("Bancof test setup");
 
   // Admin Account 셋업
   const poolAdmin = await (await getPoolAdminSigner()).getAddress();
   const emergencyAdmin = await (await getEmergencyAdminSigner()).getAddress();
-  console.log("Admin accounts:", "poolAdmin:", poolAdmin, "emergencyAdmin:", emergencyAdmin);
+  console.log("Bancof Admin accounts:", "poolAdmin:", poolAdmin, "emergencyAdmin:", emergencyAdmin);
 
   const config = loadPoolConfig(ConfigNames.Bend);
   //////////////////////////////////////////////////////////////////////////////
-  console.log("-> Prepare mock external IncentivesController...");
+  console.log("-> Bancof Prepare mock external IncentivesController...");
   const mockIncentivesController = await deployMockIncentivesController();
   const incentivesControllerAddress = mockIncentivesController.address;
 
   //////////////////////////////////////////////////////////////////////////////
-  console.log("-> Prepare proxy admin...");
+  console.log("-> Bancof Prepare proxy admin...");
   const bendProxyAdmin = await deployBendProxyAdmin(eContractid.BendProxyAdminTest);
-  console.log("bendProxyAdmin:", bendProxyAdmin.address);
+  console.log("Bancof bendProxyAdmin:", bendProxyAdmin.address);
 
   //////////////////////////////////////////////////////////////////////////////
   // !!! MUST BEFORE LendPoolConfigurator which will getBNFTRegistry from address provider when init
-  console.log("-> Prepare mock bnft registry...");
+  console.log("-> Bancof Prepare mock bnft registry...");
   const bnftGenericImpl = await deployGenericBNFTImpl(false);
 
   const bnftRegistryImpl = await deployBNFTRegistry();
@@ -65,7 +69,7 @@ const buildTestEnv = async (deployer: Signer, secondaryWallet: Signer) => {
   await waitForTx(await bnftRegistry.transferOwnership(poolAdmin));
 
   //////////////////////////////////////////////////////////////////////////////
-  console.log("-> Prepare address provider...");
+  console.log("-> Bancof Prepare address provider...");
   const addressesProviderRegistry = await deployLendPoolAddressesProviderRegistry();
 
   const addressesProvider = await deployLendPoolAddressesProvider(BendConfig.MarketId);
@@ -82,10 +86,10 @@ const buildTestEnv = async (deployer: Signer, secondaryWallet: Signer) => {
   await waitForTx(await addressesProvider.setIncentivesController(incentivesControllerAddress));
 
   //////////////////////////////////////////////////////////////////////////////
-  console.log("-> Prepare bend libraries...");
+  console.log("-> Bancof Prepare bend libraries...");
   await deployBendLibraries();
 
-  console.log("-> Prepare lend pool...");
+  console.log("-> Bancof Prepare lend pool...");
   const lendPoolImpl = await deployLendPool();
   await waitForTx(await addressesProvider.setLendPoolImpl(lendPoolImpl.address, []));
   // configurator will create proxy for implement
@@ -93,4 +97,26 @@ const buildTestEnv = async (deployer: Signer, secondaryWallet: Signer) => {
   const lendPoolProxy = await getLendPool(lendPoolAddress);
 
   await insertContractAddressInDb(eContractid.LendPool, lendPoolProxy.address);
+  console.timeEnd("setup");
 };
+
+before(async () => {
+  await rawBRE.run("set-DRE");
+  const deployer = await getDeploySigner();
+  const secondaryWallet = await getSecondSigner();
+  const FORK = process.env.FORK;
+
+  if (FORK) {
+    await rawBRE.run("bend:mainnet", { skipRegistry: true });
+  } else {
+    console.log("-> Deploying test environment...");
+    await buildTestEnv(deployer, secondaryWallet);
+  }
+
+  console.log("-> Initialize make suite...");
+  await initializeMakeSuite();
+
+  console.log("\n***************");
+  console.log("Setup and snapshot finished");
+  console.log("***************\n");
+});
